@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>TestPilot Fixture</title>
+  </head>
+  <body>
+    <h1>Fixture heading</h1>
+    <p>Visible fixture text for browser inspection.</p>
+    <div style="display: none">Hidden text must not be returned.</div>
+    <form action="/submit" method="post">
+      <label>Username <input type="text" name="username" placeholder="Your name" required></label>
+      <label>Password <input type="password" name="password" placeholder="Secret value"></label>
+      <label><input type="checkbox" name="remember" required> Remember me</label>
+      <label><input type="radio" name="role" value="tester" checked> Tester</label>
+      <label>Role
+        <select name="role-choice" id="role-choice">
+          <option value="qa">QA</option>
+          <option value="dev">Developer</option>
+        </select>
+      </label>
+      <button type="submit" aria-label="Submit fixture">Continue</button>
+    </form>
+    <a href="/help">Fixture help</a>
+    <script>
+      console.error('fixture console error');
+      fetch('http://127.0.0.1:54321/unavailable').catch(() => {});
+    </script>
+  </body>
+</html>

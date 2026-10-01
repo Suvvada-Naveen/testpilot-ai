@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>TestPilot Login Fixture</title>
+  </head>
+  <body>
+    <main>
+      <h1>Login</h1>
+      <form id="login-form" novalidate>
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" autocomplete="username">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password">
+        <label for="country">Country</label>
+        <select id="country" name="country">
+          <option value="">Choose a country</option>
+          <option value="in">India</option>
+          <option value="us">United States</option>
+        </select>
+        <label><input id="remember" name="remember" type="checkbox"> Remember me</label>
+        <button id="login-button" type="submit">Login</button>
+        <button id="delete-button" type="button">Delete account</button>
+      </form>
+      <button type="button">Help</button>
+      <button type="button">Help</button>
+      <a href="/forgot-password">Forgot Password</a>
+      <p id="message" role="alert" aria-live="polite"></p>
+      <p id="welcome" hidden>Welcome, test user.</p>
+    </main>
+    <script>
+      document.querySelector('#login-form').addEventListener('submit', (event) => {
+        event.preventDefault();
+        const username = document.querySelector('#username').value.trim();
+        const password = document.querySelector('#password').value;
+        const message = document.querySelector('#message');
+        message.textContent = '';
+        if (!username) {
+          message.textContent = 'Username is required.';
+        } else if (!password) {
+          message.textContent = 'Password is required.';
+        } else if (username === 'test@example.test' && password === 'fixture-password') {
+          document.querySelector('#welcome').hidden = false;
+        } else {
+          message.textContent = 'Invalid username or password.';
+        }
+      });
+    </script>
+  </body>
+</html>
