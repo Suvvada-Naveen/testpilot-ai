@@ -176,7 +176,7 @@ function Dashboard(props: DashboardProps) {
               onSubmit={props.onSubmit}
             />
             <aside className="runtime-panel" aria-label="Session environment">
-              <div className="runtime-heading"><span className="runtime-icon"><Globe2 size={18} aria-hidden="true" /></span><span>SESSION ENVIRONMENT</span><span className="mock-pill">PHASE 4</span></div>
+              <div className="runtime-heading"><span className="runtime-icon"><Globe2 size={18} aria-hidden="true" /></span><span>SESSION ENVIRONMENT</span><span className="mock-pill">PHASE 5</span></div>
               <div className="runtime-divider" />
               <div className="runtime-mode-label">SELECTED MODE</div>
               <strong className="runtime-mode">{props.testMode}</strong>

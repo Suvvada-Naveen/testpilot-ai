@@ -120,6 +120,8 @@ async def resolve_element(
 
 _DESTRUCTIVE_TARGET = re.compile(r"\b(delete|remove|purchase|buy|pay|payment|send|cancel|place order|submit|irreversible)\b", re.IGNORECASE)
 _ALLOWED_KEYS = {"Enter", "Tab", "Escape", "Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "Backspace", "Delete"}
+MOCK_PASSWORD_TOKEN = "[MOCK_PASSWORD]"
+MOCK_INVALID_PASSWORD_TOKEN = "[MOCK_INVALID_PASSWORD]"
 
 
 class BrowserTools:
@@ -195,7 +197,7 @@ class BrowserTools:
         if action.action == BrowserToolName.READ_PAGE:
             return await read_page(self.page, self._settings.max_page_text_length)
         if action.action == BrowserToolName.TAKE_SCREENSHOT:
-            screenshot_id = await self._screenshot_manager.capture(self.page, self._execution_id)
+            screenshot_id = await self.capture_screenshot()
             return {"screenshot_id": screenshot_id}
         if action.action == BrowserToolName.SCROLL:
             delta = -600 if action.value == "up" else 600
@@ -206,17 +208,35 @@ class BrowserTools:
             await self.page.wait_for_timeout(wait_ms)
             return {"waited_ms": wait_ms}
 
-        if action.action == BrowserToolName.CLICK and _DESTRUCTIVE_TARGET.search(target) and not self._confirm_destructive:
+        if action.action in {BrowserToolName.CLICK, BrowserToolName.PRESS} and _DESTRUCTIVE_TARGET.search(target) and not self._confirm_destructive:
             raise BrowserToolError("Destructive action requires explicit user confirmation.")
 
         locator = await resolve_element(self.page, target, action.action)
+        if action.action == BrowserToolName.PRESS and action.value == "Enter" and not self._confirm_destructive:
+            controls = self.page.locator("button, input[type='submit']")
+            for index in range(min(await controls.count(), 100)):
+                control = controls.nth(index)
+                if not await control.is_visible():
+                    continue
+                label = " ".join(filter(None, [
+                    await control.inner_text(),
+                    await control.get_attribute("aria-label"),
+                    await control.get_attribute("value"),
+                ]))
+                if _DESTRUCTIVE_TARGET.search(label):
+                    raise BrowserToolError("Enter could submit a destructive action; explicit user confirmation is required.")
         if action.action == BrowserToolName.CLICK:
             await locator.click(timeout=timeout)
         elif action.action == BrowserToolName.FILL:
             value = action.value or ""
             input_type = (await locator.get_attribute("type") or "").casefold()
             if input_type == "password":
-                value = self._credential_provider.get_password()
+                if self._requires_credentials and value == MOCK_PASSWORD_TOKEN:
+                    value = self._credential_provider.get_password()
+                elif not self._requires_credentials and value == MOCK_INVALID_PASSWORD_TOKEN:
+                    value = "not-a-valid-mock-password"
+                else:
+                    raise BrowserToolError("Password values must use the approved mock credential placeholder.")
             elif self._requires_credentials and any(word in target.casefold() for word in ("username", "user name", "email")):
                 value = self._credential_provider.get_username()
             await locator.fill(value, timeout=timeout)
@@ -238,3 +258,21 @@ class BrowserTools:
         else:
             raise BrowserToolError("Browser tool is not available.")
         return {"completed": True}
+
+    async def capture_screenshot(self) -> str:
+        password_inputs = self.page.locator("input[type='password']")
+        values: list[tuple[Locator, str]] = []
+        for index in range(min(await password_inputs.count(), 50)):
+            locator = password_inputs.nth(index)
+            if not await locator.is_visible():
+                continue
+            value = await locator.input_value()
+            values.append((locator, value))
+            if value:
+                await locator.fill("", timeout=self._settings.action_timeout)
+        try:
+            return await self._screenshot_manager.capture(self.page, self._execution_id)
+        finally:
+            for locator, value in values:
+                if value:
+                    await locator.fill(value, timeout=self._settings.action_timeout)

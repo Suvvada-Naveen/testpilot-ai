@@ -35,7 +35,7 @@ class LoginPlanAgent:
 class LoginActionPlanner:
     def __init__(self) -> None:
         self._actions = [
-            BrowserAction(action=BrowserToolName.FILL, target="Password field", value="not-a-credential", reason="Enter a test-only password to trigger form validation."),
+            BrowserAction(action=BrowserToolName.FILL, target="Password field", value="[MOCK_PASSWORD]", reason="Enter the configured mock password to trigger username validation."),
             BrowserAction(action=BrowserToolName.CLICK, target="Login", reason="Submit the login form and observe required username validation."),
         ]
         self._index = 0
@@ -78,6 +78,7 @@ def test_inspect_generate_execute_and_retrieve_local_login_validation() -> None:
                 steps=["Enter the mock password", "Click Login"],
                 expected_result="Username is required.",
                 target_elements=["Password field", "Login button"],
+                requires_credentials=True,
             )],
         )
         settings = Settings(

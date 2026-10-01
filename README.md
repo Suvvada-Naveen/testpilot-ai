@@ -62,6 +62,7 @@ Browser configuration is read from the environment:
 | `MAX_AI_TEST_CASES` | `30` | Maximum accepted test cases per plan |
 | `ACTION_TIMEOUT` | `10000` | Per browser action timeout in milliseconds |
 | `NAVIGATION_TIMEOUT` | `30000` | Browser navigation timeout in milliseconds |
+| `TEST_EXECUTION_TIMEOUT` | `180` | Overall per-test execution deadline in seconds |
 | `MAX_ACTIONS_PER_TEST` | `30` | Maximum planner/browser action turns per test |
 | `MAX_TEST_CASES_PER_EXECUTION` | `10` | Maximum cases in a batch execution request |
 | `TEST_CREDENTIAL_USERNAME` | unset | Optional mock/test username, backend only |

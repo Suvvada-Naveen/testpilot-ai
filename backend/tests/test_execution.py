@@ -195,13 +195,15 @@ def test_browser_tools_fill_select_check_click_and_safe_resolution(login_url: st
         await manager.start()
         await manager.create_context()
         page = await manager.create_page()
-        tools = BrowserTools(page, settings, "EXEC-TOOLS", login_url, MockCredentialProvider(settings))
+        tools = BrowserTools(
+            page, settings, "EXEC-TOOLS", login_url, MockCredentialProvider(settings), requires_credentials=True,
+        )
         await page.route("**/*", tools.guard_request)
         await page.goto(login_url)
 
         username = await resolve_element(page, "Username", BrowserToolName.FILL)
         await tools.execute_browser_action(action(BrowserToolName.FILL, "Username", "test@example.test"))
-        await tools.execute_browser_action(action(BrowserToolName.FILL, "Password field", "this-value-is-ignored"))
+        await tools.execute_browser_action(action(BrowserToolName.FILL, "Password field", "[MOCK_PASSWORD]"))
         await tools.execute_browser_action(action(BrowserToolName.SELECT, "Country", "India"))
         await tools.execute_browser_action(action(BrowserToolName.CHECK, "Remember me"))
         await tools.execute_browser_action(action(BrowserToolName.CLICK, "Login"))
@@ -211,6 +213,18 @@ def test_browser_tools_fill_select_check_click_and_safe_resolution(login_url: st
         assert await page.locator("#country").input_value() == "in"
         assert await page.locator("#remember").is_checked()
         assert await page.get_by_text("Welcome, test user.", exact=True).is_visible()
+
+        captured_passwords: list[str] = []
+
+        async def record_password_free_capture(captured_page, session_id: str) -> str:
+            captured_passwords.append(await captured_page.locator("#password").input_value())
+            return "safe-capture.png"
+
+        tools._screenshot_manager.capture = record_password_free_capture
+        screenshot = await tools.execute_browser_action(action(BrowserToolName.TAKE_SCREENSHOT))
+        assert screenshot["screenshot_id"] == "safe-capture.png"
+        assert captured_passwords == [""]
+        assert await page.locator("#password").input_value() == "fixture-password"
         await manager.close_page(page)
         await manager.close()
 
@@ -234,6 +248,8 @@ def test_ambiguous_missing_and_destructive_targets_are_blocked(login_url: str) -
             await tools.execute_browser_action(action(BrowserToolName.CLICK, "No such control"))
         with pytest.raises(BrowserToolError, match="explicit user confirmation"):
             await tools.execute_browser_action(action(BrowserToolName.CLICK, "Delete account"))
+        with pytest.raises(BrowserToolError, match="Enter could submit a destructive action"):
+            await tools.execute_browser_action(action(BrowserToolName.PRESS, "Password field", "Enter"))
         with pytest.raises(BrowserToolError, match="outside the testing website"):
             await tools.execute_browser_action(action(BrowserToolName.NAVIGATE, "https://example.com/"))
         assert await page.locator("#delete-button").is_visible()
@@ -256,7 +272,7 @@ def test_execution_pass_requires_page_evidence_and_captures_screenshot(login_url
             test_credential_password=SecretStr("fixture-password"),
         )
         planner = FakePlanner([
-            action(BrowserToolName.FILL, "Password field", "must-not-be-used"),
+            action(BrowserToolName.FILL, "Password field", "[MOCK_INVALID_PASSWORD]"),
             action(BrowserToolName.CLICK, "Login"),
         ])
         service, repository = make_service(settings, planner, EvidenceEvaluator())
@@ -326,13 +342,13 @@ def test_action_limit_and_unconfigured_credentials_return_blocked(login_url: str
         assert len(result.actions) == 2
 
         missing_credentials_settings = Settings(_env_file=None, allow_local_urls=True, max_actions_per_test=3)
-        credentials_planner = FakePlanner([action(BrowserToolName.FILL, "Password field", "do-not-store")])
+        credentials_planner = FakePlanner([action(BrowserToolName.FILL, "Password field", "[MOCK_PASSWORD]")])
         credentials_service, _ = make_service(missing_credentials_settings, credentials_planner, EvidenceEvaluator())
         credential_case = login_case().model_copy(update={"requires_credentials": True})
         missing = await credentials_service.execute_test_case("TEST-005", credential_case, login_url)
         assert missing.status is ExecutionStatus.BLOCKED
         assert "Mock test password is not configured" in (missing.failure_reason or "")
-        assert "do-not-store" not in str(missing.model_dump())
+        assert "[MOCK_PASSWORD]" not in str(missing.model_dump())
 
     asyncio.run(run())
 
@@ -358,5 +374,28 @@ def test_invalid_ai_action_and_navigation_timeout_are_blocked(login_url: str) ->
         timeout_result = await timeout_service.execute_test_case("TEST-TIMEOUT", login_case(), f"{login_url.rsplit('/', 1)[0]}/delay")
         assert timeout_result.status is ExecutionStatus.BLOCKED
         assert timeout_result.failure_reason == "Browser action timed out."
+
+    asyncio.run(run())
+
+
+def test_overall_test_timeout_returns_blocked(login_url: str) -> None:
+    class SlowPlanner:
+        async def next_action(self, *args: Any) -> BrowserAction:
+            await asyncio.sleep(30)
+            return action(BrowserToolName.READ_PAGE)
+
+    async def run() -> None:
+        settings = Settings(
+            _env_file=None,
+            allow_local_urls=True,
+            test_execution_timeout=10,
+            navigation_timeout=5000,
+        )
+        service, _ = make_service(settings, SlowPlanner(), EvidenceEvaluator())
+
+        result = await service.execute_test_case("TEST-DEADLINE", login_case(), login_url)
+
+        assert result.status is ExecutionStatus.BLOCKED
+        assert result.failure_reason == "Test execution timed out."
 
     asyncio.run(run())

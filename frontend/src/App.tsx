@@ -9,6 +9,7 @@ const modeValues: Record<TestMode, ApiTestMode> = {
   Test: 'TEST',
   'Full Test': 'FULL_TEST',
 }
+const executionBatchSize = 10
 
 function App() {
   const [url, setUrl] = useState('')
@@ -196,13 +197,11 @@ function App() {
     if (!sessionCreated || testCaseIds.length === 0 || isExecuting) return
 
     const sessionId = sessionCreated.id
-    const firstCaseId = testCaseIds[0]
-    const firstCase = testPlan?.test_cases.find((testCase) => testCase.id === firstCaseId)
     const stageTimers: number[] = []
     setIsExecuting(true)
     setExecutionError(null)
     setExecutionStage('Starting browser...')
-    stageTimers.push(window.setTimeout(() => setExecutionStage(`Executing ${firstCaseId}...`), 500))
+    stageTimers.push(window.setTimeout(() => setExecutionStage(`Executing ${testCaseIds[0]}...`), 500))
     stageTimers.push(window.setTimeout(() => setExecutionStage('Performing browser actions...'), 1100))
     stageTimers.push(window.setTimeout(() => setExecutionStage('Evaluating result...'), 2100))
 
@@ -218,14 +217,18 @@ function App() {
     }, 500)
 
     try {
-      const result = await executeTestCases(sessionId, testCaseIds, confirmDestructive)
-      mergeResults(result.executions)
-      if (result.executions.length === 1) {
-        const status = result.executions[0].status
-        setExecutionStage(status === 'PASSED' ? 'Test Passed' : status === 'FAILED' ? 'Test Failed' : 'Test Blocked')
-      } else {
-        setExecutionStage(result.status === 'PASSED' ? 'Tests Passed' : result.status === 'FAILED' ? 'Some Tests Failed' : 'Execution Complete')
+      const results: TestExecutionResult[] = []
+      for (let index = 0; index < testCaseIds.length; index += executionBatchSize) {
+        const batchIds = testCaseIds.slice(index, index + executionBatchSize)
+        setExecutionStage(`Executing ${batchIds[0]}...`)
+        const batch = await executeTestCases(sessionId, batchIds, confirmDestructive)
+        results.push(...batch.executions)
+        mergeResults(batch.executions)
       }
+      const allPassed = results.every((result) => result.status === 'PASSED')
+      const anyFailed = results.some((result) => result.status === 'FAILED')
+      const anyBlocked = results.some((result) => result.status === 'BLOCKED')
+      setExecutionStage(anyFailed ? 'Some Tests Failed' : anyBlocked ? 'Some Tests Blocked' : allPassed ? (results.length === 1 ? 'Test Passed' : 'Tests Passed') : 'Execution Complete')
     } catch (error) {
       setExecutionStage('Execution failed.')
       setExecutionError(error instanceof ApiRequestError ? error.message : 'Unable to execute the selected tests. Please try again.')
@@ -239,7 +242,6 @@ function App() {
         // Preserve execution results already returned by the execution request.
       }
     }
-    if (!firstCase) setExecutionStage('Execution complete.')
   }
 
   return (

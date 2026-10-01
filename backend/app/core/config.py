@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     max_ai_test_cases: int = 30
     action_timeout: int = 10000
     navigation_timeout: int = 30000
+    test_execution_timeout: int = 180
     max_actions_per_test: int = 30
     max_test_cases_per_execution: int = 10
     test_credential_username: str | None = None

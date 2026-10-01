@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import time
+import asyncio
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -60,6 +61,7 @@ class ExecutionService:
     ) -> TestExecutionResult:
         started_at = datetime.now(UTC)
         started_clock = time.perf_counter()
+        deadline = started_clock + self._settings.test_execution_timeout
         result = TestExecutionResult(
             id=f"EXEC-{uuid4().hex[:12].upper()}",
             session_id=session_id,
@@ -101,9 +103,9 @@ class ExecutionService:
                 })
 
         try:
-            await manager.start()
-            await manager.create_context()
-            page = await manager.create_page()
+            await asyncio.wait_for(manager.start(), timeout=self._remaining_budget(deadline))
+            context = await asyncio.wait_for(manager.create_context(), timeout=self._remaining_budget(deadline))
+            page = await asyncio.wait_for(manager.create_page(), timeout=self._remaining_budget(deadline))
             page.set_default_timeout(self._settings.action_timeout)
             tools = BrowserTools(
                 page,
@@ -116,21 +118,33 @@ class ExecutionService:
             )
             page.on("console", capture_console)
             page.on("requestfailed", capture_request_failure)
-            await page.route("**/*", tools.guard_request)
+            await context.route("**/*", tools.guard_request)
+
+            async def close_popup(popup: Page) -> None:
+                await popup.close()
+
+            page.on("popup", close_popup)
 
             navigate = BrowserAction(
                 action=BrowserToolName.NAVIGATE,
                 target=url,
                 reason="Open the approved testing website.",
             )
-            await self._execute_action(result, tools, navigate, action_history, action_results, mask)
+            await self._execute_action(result, tools, navigate, action_history, action_results, mask, deadline)
             page_state = await self._read_safe_page(page, mask)
 
             while len(result.actions) < self._settings.max_actions_per_test:
-                action = await self._action_planner.next_action(test_case, page_state, action_history, action_results)
+                remaining = deadline - time.perf_counter()
+                if remaining <= 0:
+                    self._finish(result, TestExecutionStatus.BLOCKED, "Test execution timed out.", page_state, started_clock, console_errors, network_errors)
+                    break
+                action = await asyncio.wait_for(
+                    self._action_planner.next_action(test_case, page_state, action_history, action_results),
+                    timeout=remaining,
+                )
                 if not isinstance(action, BrowserAction):
                     action = BrowserAction.model_validate(action)
-                await self._execute_action(result, tools, action, action_history, action_results, mask)
+                await self._execute_action(result, tools, action, action_history, action_results, mask, deadline)
                 if tools.restricted_request:
                     self._finish(
                         result, TestExecutionStatus.BLOCKED,
@@ -144,12 +158,19 @@ class ExecutionService:
                     page_state = self._mask_page_state(tool_result, mask)
                 else:
                     page_state = await self._read_safe_page(page, mask)
-                evaluation = await self._result_evaluator.evaluate(
-                    test_case,
-                    page_state,
-                    action_history,
-                    console_errors,
-                    network_errors,
+                remaining = deadline - time.perf_counter()
+                if remaining <= 0:
+                    self._finish(result, TestExecutionStatus.BLOCKED, "Test execution timed out.", page_state, started_clock, console_errors, network_errors)
+                    break
+                evaluation = await asyncio.wait_for(
+                    self._result_evaluator.evaluate(
+                        test_case,
+                        page_state,
+                        action_history,
+                        console_errors,
+                        network_errors,
+                    ),
+                    timeout=remaining,
                 )
                 if evaluation.finished:
                     if evaluation.status == EvaluationStatus.PASS:
@@ -185,6 +206,8 @@ class ExecutionService:
                     console_errors,
                     network_errors,
                 )
+        except asyncio.TimeoutError:
+            self._finish(result, TestExecutionStatus.BLOCKED, "Test execution timed out.", page_state, started_clock, console_errors, network_errors)
         except BrowserToolError as error:
             self._finish(result, TestExecutionStatus.BLOCKED, str(error), page_state, started_clock, console_errors, network_errors)
         except Exception as error:
@@ -199,7 +222,14 @@ class ExecutionService:
         finally:
             if page is not None:
                 try:
-                    result.screenshot_id = await ScreenshotManager().capture(page, result.id)
+                    await page.locator("input[type='password']").fill("", timeout=self._settings.action_timeout)
+                except Exception as error:
+                    logger.warning("password field cleanup failed execution_id=%s error_type=%s", result.id, type(error).__name__)
+                try:
+                    if tools is not None:
+                        result.screenshot_id = await tools.capture_screenshot()
+                    else:
+                        result.screenshot_id = await ScreenshotManager().capture(page, result.id)
                 except Exception as error:
                     logger.warning("execution screenshot capture failed execution_id=%s error_type=%s", result.id, type(error).__name__)
                     if result.status == TestExecutionStatus.PASSED:
@@ -233,12 +263,20 @@ class ExecutionService:
         action_history: list[dict[str, Any]],
         action_results: list[dict[str, Any]],
         mask: Any,
+        deadline: float,
     ) -> None:
         started = time.perf_counter()
         try:
-            observation = await tools.execute_browser_action(action)
+            remaining = deadline - time.perf_counter()
+            if remaining <= 0:
+                raise asyncio.TimeoutError
+            observation = await asyncio.wait_for(tools.execute_browser_action(action), timeout=remaining)
             status = ActionExecutionStatus.SUCCESS
             error_message = None
+        except asyncio.TimeoutError as error:
+            observation = None
+            status = ActionExecutionStatus.FAILED
+            error_message = "Test execution timed out."
         except BrowserToolError as error:
             observation = None
             status = ActionExecutionStatus.FAILED
@@ -310,6 +348,13 @@ class ExecutionService:
         if self._settings.test_credential_password is not None:
             secrets.append(self._settings.test_credential_password.get_secret_value())
         return secrets
+
+    @staticmethod
+    def _remaining_budget(deadline: float) -> float:
+        remaining = deadline - time.perf_counter()
+        if remaining <= 0:
+            raise asyncio.TimeoutError
+        return remaining
 
     @staticmethod
     def _finish(

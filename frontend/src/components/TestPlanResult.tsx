@@ -66,7 +66,7 @@ function TestPlanResult({
           <span className="section-kicker">AI-GENERATED TEST PLAN</span>
           <h2 id="test-plan-title">Test Plan</h2>
         </div>
-        <span className="not-executed-badge">Generated - Not Yet Executed</span>
+        <span className="not-executed-badge">{executionResults.length ? 'Execution Results Available' : 'Generated - Not Yet Executed'}</span>
       </div>
       <div className="test-plan-summary">
         <div><span>Summary</span><strong>{plan.summary}</strong></div>
