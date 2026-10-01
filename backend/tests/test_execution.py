@@ -204,6 +204,7 @@ def test_browser_tools_fill_select_check_click_and_safe_resolution(login_url: st
         username = await resolve_element(page, "Username", BrowserToolName.FILL)
         await tools.execute_browser_action(action(BrowserToolName.FILL, "Username", "test@example.test"))
         await tools.execute_browser_action(action(BrowserToolName.FILL, "Password field", "[MOCK_PASSWORD]"))
+        await page.locator("#cc-number").fill("4111 1111 1111 1111")
         await tools.execute_browser_action(action(BrowserToolName.SELECT, "Country", "India"))
         await tools.execute_browser_action(action(BrowserToolName.CHECK, "Remember me"))
         await tools.execute_browser_action(action(BrowserToolName.CLICK, "Login"))
@@ -217,14 +218,18 @@ def test_browser_tools_fill_select_check_click_and_safe_resolution(login_url: st
         captured_passwords: list[str] = []
 
         async def record_password_free_capture(captured_page, session_id: str) -> str:
-            captured_passwords.append(await captured_page.locator("#password").input_value())
+            captured_passwords.extend([
+                await captured_page.locator("#password").input_value(),
+                await captured_page.locator("#cc-number").input_value(),
+            ])
             return "safe-capture.png"
 
         tools._screenshot_manager.capture = record_password_free_capture
         screenshot = await tools.execute_browser_action(action(BrowserToolName.TAKE_SCREENSHOT))
         assert screenshot["screenshot_id"] == "safe-capture.png"
-        assert captured_passwords == [""]
+        assert captured_passwords == ["", ""]
         assert await page.locator("#password").input_value() == "fixture-password"
+        assert await page.locator("#cc-number").input_value() == "4111 1111 1111 1111"
         await manager.close_page(page)
         await manager.close()
 

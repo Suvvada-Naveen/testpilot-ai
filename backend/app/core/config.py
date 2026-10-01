@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     test_execution_timeout: int = 180
     max_actions_per_test: int = 30
     max_test_cases_per_execution: int = 10
+    max_failure_evidence_items: int = 100
+    max_failure_analysis_text: int = 8000
+    max_failure_analysis_evidence: int = 60
+    max_failure_analysis_evidence: int = 60
     test_credential_username: str | None = None
     test_credential_password: SecretStr | None = None
 

@@ -260,10 +260,14 @@ class BrowserTools:
         return {"completed": True}
 
     async def capture_screenshot(self) -> str:
-        password_inputs = self.page.locator("input[type='password']")
+        sensitive_inputs = self.page.locator(
+            "input[type='password'], input[autocomplete^='cc-' i], input[name*='card' i], input[id*='card' i], "
+            "input[name*='token' i], input[id*='token' i], input[name*='secret' i], input[id*='secret' i], "
+            "input[name*='authorization' i], input[id*='authorization' i], textarea[name*='secret' i], textarea[name*='token' i]"
+        )
         values: list[tuple[Locator, str]] = []
-        for index in range(min(await password_inputs.count(), 50)):
-            locator = password_inputs.nth(index)
+        for index in range(min(await sensitive_inputs.count(), 50)):
+            locator = sensitive_inputs.nth(index)
             if not await locator.is_visible():
                 continue
             value = await locator.input_value()

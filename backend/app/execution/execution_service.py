@@ -1,14 +1,12 @@
 import json
 import logging
-import re
 import time
 import asyncio
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
-from playwright.async_api import Page, Request
+from playwright.async_api import Page, Request, Response
 
 from app.agent.action_planner import ActionPlanner
 from app.agent.result_evaluator import ResultEvaluator
@@ -17,6 +15,8 @@ from app.browser.browser_tools import BrowserToolError, BrowserTools, Credential
 from app.browser.page_reader import read_page
 from app.browser.screenshot_manager import ScreenshotManager
 from app.core.config import Settings
+from app.core.sensitive_data import redact_sensitive_text, safe_url, sanitize_sensitive_data
+from app.evidence.evidence_collector import EvidenceCollector
 from app.repositories.execution_repository import ExecutionRepository
 from app.schemas.browser_action import BrowserAction, BrowserToolName, EvaluationStatus
 from app.schemas.test_execution import ActionExecution, ActionExecutionStatus, TestExecutionResult, TestExecutionStatus
@@ -26,15 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 def _safe_url(url: str) -> str:
-    try:
-        parsed = urlsplit(url)
-        host = parsed.hostname or ""
-        netloc = f"[{host}]" if ":" in host else host
-        if parsed.port:
-            netloc = f"{netloc}:{parsed.port}"
-        return urlunsplit((parsed.scheme, netloc, parsed.path, "", ""))
-    except ValueError:
-        return "[invalid URL]"
+    return safe_url(url)
 
 
 class ExecutionService:
@@ -45,12 +37,14 @@ class ExecutionService:
         result_evaluator: ResultEvaluator,
         settings: Settings,
         credential_provider: CredentialProvider | None = None,
+        evidence_collector: EvidenceCollector | None = None,
     ) -> None:
         self._repository = repository
         self._action_planner = action_planner
         self._result_evaluator = result_evaluator
         self._settings = settings
         self._credential_provider = credential_provider or MockCredentialProvider(settings)
+        self._evidence_collector = evidence_collector
 
     async def execute_test_case(
         self,
@@ -85,10 +79,7 @@ class ExecutionService:
         secrets = self._configured_secrets()
 
         def mask(value: str) -> str:
-            for secret in secrets:
-                if secret:
-                    value = value.replace(secret, "********")
-            return value
+            return redact_sensitive_text(value, secrets)
 
         def capture_console(message: Any) -> None:
             if getattr(message, "type", "") == "error" and len(console_errors) < self._settings.max_console_messages:
@@ -100,6 +91,14 @@ class ExecutionService:
                     "url": _safe_url(request.url),
                     "method": request.method,
                     "failure": mask(str(request.failure or "Request failed")[:500]),
+                })
+
+        def capture_http_error(response: Response) -> None:
+            if response.status >= 400 and len(network_errors) < self._settings.max_console_messages:
+                network_errors.append({
+                    "url": _safe_url(response.url),
+                    "method": response.request.method,
+                    "failure": f"HTTP {response.status}",
                 })
 
         try:
@@ -118,6 +117,7 @@ class ExecutionService:
             )
             page.on("console", capture_console)
             page.on("requestfailed", capture_request_failure)
+            page.on("response", capture_http_error)
             await context.route("**/*", tools.guard_request)
 
             async def close_popup(popup: Page) -> None:
@@ -239,6 +239,11 @@ class ExecutionService:
             result.network_errors = network_errors
             if result.completed_at is None:
                 self._finish(result, TestExecutionStatus.BLOCKED, "Test execution did not complete.", page_state, started_clock, console_errors, network_errors)
+            if self._evidence_collector is not None and result.status in {TestExecutionStatus.FAILED, TestExecutionStatus.BLOCKED}:
+                try:
+                    self._evidence_collector.collect_failure(test_case, result, url)
+                except Exception as error:
+                    logger.warning("failure evidence collection failed execution_id=%s error_type=%s", result.id, type(error).__name__)
             self._repository.update_execution(result)
             try:
                 await manager.close_page(page)
@@ -315,20 +320,8 @@ class ExecutionService:
 
     @staticmethod
     def _mask_page_state(state: dict[str, Any], mask: Any) -> dict[str, Any]:
-        safe_state = dict(state)
-        for key in ("url", "title", "visible_text"):
-            value = safe_state.get(key)
-            if isinstance(value, str):
-                safe_state[key] = mask(_safe_url(value) if key == "url" else value)
-        elements = safe_state.get("elements", {})
-        if isinstance(elements, dict):
-            for collection in ("links", "forms"):
-                for item in elements.get(collection, []):
-                    if isinstance(item, dict):
-                        key = "href" if collection == "links" else "action"
-                        if isinstance(item.get(key), str):
-                            item[key] = _safe_url(item[key])
-        return safe_state
+        safe_state = sanitize_sensitive_data(state)
+        return ExecutionService._safe_ai_observation(safe_state, mask)
 
     @staticmethod
     def _safe_ai_observation(value: Any, mask: Any, key: str = "") -> Any:
@@ -369,6 +362,7 @@ class ExecutionService:
         result.status = status
         result.failure_reason = reason if status in {TestExecutionStatus.FAILED, TestExecutionStatus.BLOCKED} else None
         result.actual_result = str(page_state.get("visible_text", ""))[:12000]
+        result.actual_page_state = sanitize_sensitive_data(page_state)
         result.duration = round(time.perf_counter() - started_clock, 3)
         result.completed_at = datetime.now(UTC)
         result.console_errors = console_errors

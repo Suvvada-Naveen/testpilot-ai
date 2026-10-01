@@ -8,9 +8,16 @@ from fastapi.responses import JSONResponse
 from app.ai.ai_client import AIClient
 from app.agent.action_planner import ActionPlanner
 from app.agent.result_evaluator import ResultEvaluator
-from app.api.routes import executions, health, tests
+from app.api.routes import analysis, bug_reports, executions, health, tests
+from app.analysis.bug_generator import BugGenerator
+from app.analysis.failure_analysis_repository import FailureAnalysisRepository
+from app.analysis.failure_analyzer import FailureAnalyzer
+from app.bug_reports.bug_report_repository import BugReportRepository
+from app.bug_reports.bug_report_service import BugReportService
 from app.core.config import Settings
 from app.execution.execution_service import ExecutionService
+from app.evidence.evidence_collector import EvidenceCollector
+from app.evidence.evidence_repository import EvidenceRepository
 from app.repositories.execution_repository import ExecutionRepository
 from app.repositories.test_plan_repository import TestPlanRepository
 from app.repositories.test_session_repository import TestSessionRepository
@@ -32,6 +39,9 @@ def create_app(
     app_repository = repository or TestSessionRepository()
     app_test_plan_repository = test_plan_repository or TestPlanRepository()
     app_execution_repository = execution_repository or ExecutionRepository()
+    app_evidence_repository = EvidenceRepository()
+    app_failure_analysis_repository = FailureAnalysisRepository()
+    app_bug_report_repository = BugReportRepository()
     ai_client = AIClient(app_settings)
     app = FastAPI(title="TestPilot AI API", version="2.0.0")
     app.state.settings = app_settings
@@ -40,11 +50,26 @@ def create_app(
     app.state.test_plan_repository = app_test_plan_repository
     app.state.testing_agent = testing_agent or TestingAgent(ai_client, app_settings)
     app.state.execution_repository = app_execution_repository
+    evidence_collector = EvidenceCollector(app_evidence_repository, app_settings)
+    app.state.evidence_repository = app_evidence_repository
+    app.state.failure_analysis_repository = app_failure_analysis_repository
+    app.state.bug_report_repository = app_bug_report_repository
+    app.state.failure_analyzer = FailureAnalyzer(ai_client, app_settings)
+    app.state.bug_generator = BugGenerator(ai_client, app_settings)
+    app.state.bug_report_service = BugReportService(
+        app.state.failure_analyzer,
+        app.state.bug_generator,
+        evidence_collector,
+        app_evidence_repository,
+        app_failure_analysis_repository,
+        app_bug_report_repository,
+    )
     app.state.execution_service = execution_service or ExecutionService(
         app_execution_repository,
         ActionPlanner(ai_client),
         ResultEvaluator(ai_client),
         app_settings,
+        evidence_collector=evidence_collector,
     )
 
     origins: Sequence[str] = tuple(dict.fromkeys((
@@ -70,6 +95,9 @@ def create_app(
     app.include_router(health.router)
     app.include_router(tests.router)
     app.include_router(executions.router)
+    app.include_router(analysis.router)
+    app.include_router(bug_reports.execution_router)
+    app.include_router(bug_reports.session_router)
     return app
 
 

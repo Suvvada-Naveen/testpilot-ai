@@ -2,6 +2,7 @@ from datetime import datetime
 from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from typing import Any
 
 from app.schemas.browser_action import BrowserToolName
 
@@ -43,6 +44,7 @@ class TestExecutionResult(BaseModel):
     actions: list[ActionExecution] = Field(default_factory=list)
     expected_result: str
     actual_result: str = ""
+    actual_page_state: dict[str, Any] = Field(default_factory=dict)
     failure_reason: str | None = None
     screenshot_id: str | None = None
     console_errors: list[dict[str, str]] = Field(default_factory=list)

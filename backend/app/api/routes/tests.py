@@ -12,6 +12,9 @@ from app.schemas.test_plan import TestPlan
 from app.schemas.test_session import CreateTestSessionRequest, TestSessionResponse
 from app.repositories.test_plan_repository import TestPlanRepository
 from app.repositories.execution_repository import ExecutionRepository
+from app.analysis.failure_analysis_repository import FailureAnalysisRepository
+from app.bug_reports.bug_report_repository import BugReportRepository
+from app.evidence.evidence_repository import EvidenceRepository
 from app.services.browser_test_service import BrowserInspectionError, UrlValidationError, inspect_website
 from app.services.test_session_service import SessionValidationError, TestSessionService
 from app.ai.testing_agent import TestingAgent
@@ -37,6 +40,18 @@ def get_test_plan_repository(request: Request) -> TestPlanRepository:
 
 def get_execution_repository(request: Request) -> ExecutionRepository:
     return request.app.state.execution_repository
+
+
+def get_evidence_repository(request: Request) -> EvidenceRepository:
+    return request.app.state.evidence_repository
+
+
+def get_analysis_repository(request: Request) -> FailureAnalysisRepository:
+    return request.app.state.failure_analysis_repository
+
+
+def get_bug_report_repository(request: Request) -> BugReportRepository:
+    return request.app.state.bug_report_repository
 
 
 @router.post("", response_model=TestSessionResponse, status_code=status.HTTP_201_CREATED)
@@ -74,10 +89,17 @@ def delete_test_session(
     service: TestSessionService = Depends(get_test_session_service),
     plan_repository: TestPlanRepository = Depends(get_test_plan_repository),
     execution_repository: ExecutionRepository = Depends(get_execution_repository),
+    evidence_repository: EvidenceRepository = Depends(get_evidence_repository),
+    analysis_repository: FailureAnalysisRepository = Depends(get_analysis_repository),
+    bug_report_repository: BugReportRepository = Depends(get_bug_report_repository),
 ) -> Response:
     if not service.delete(session_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Testing session not found")
     plan_repository.delete_by_session_id(session_id)
+    for execution in execution_repository.get_session_executions(session_id):
+        evidence_repository.delete_by_execution_id(execution.id)
+        analysis_repository.delete_by_execution_id(execution.id)
+        bug_report_repository.delete_by_execution_id(session_id, execution.id)
     execution_repository.delete_session_executions(session_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

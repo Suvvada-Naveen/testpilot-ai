@@ -32,6 +32,11 @@ class ExecutionRepository:
                 return None
             return execution.model_copy(deep=True)
 
+    def get_by_id(self, execution_id: str) -> TestExecutionResult | None:
+        with self._lock:
+            execution = self._executions.get(execution_id)
+            return execution.model_copy(deep=True) if execution is not None else None
+
     def get_session_executions(self, session_id: str) -> list[TestExecutionResult]:
         with self._lock:
             ids = self._session_ids.get(session_id, [])
